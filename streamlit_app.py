@@ -94,7 +94,7 @@ def render_header() -> None:
 
 def render_sidebar() -> tuple[str, str, str]:
     st.sidebar.title("Navegacion")
-    api_url = st.sidebar.text_input("URL de API", value="http://127.0.0.1:8000")
+    api_url = st.sidebar.text_input("URL de API", value="https://churn-prediction-dashboard-3yla.onrender.com")
     eda_model = st.sidebar.selectbox("Modelo para EDA", ("tree", "logistic"), index=0)
     selected_tab = st.sidebar.radio(
         "Selecciona una seccion:",
