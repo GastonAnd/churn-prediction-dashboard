@@ -1,8 +1,10 @@
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
+from pathlib import Path
+import time
+
 import pandas as pd
-import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.stats import chi2_contingency, mannwhitneyu
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
@@ -10,22 +12,37 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
-import time 
 
-sns.set_style("whitegrid")
+BASE_DIR = Path(__file__).resolve().parent
 df_customer = pd.read_csv("Data/telecom_churn.csv", sep=",", encoding="latin1", low_memory=False)
+PLOT_COUNTERS = {
+	"univariado": 0,
+	"bivariado": 0,
+	"modelado": 0,
+	"general": 0,
+}
 
 
-def display_plot() -> None:
-    # Esto le pone un nombre único a cada gráfico (ej: grafico_170000.png)
-    nombre_archivo = f"grafico_{int(time.time() * 1000)}.png"
-    
-    # Guarda la imagen en alta calidad (dpi=300) y ajusta los bordes
-    plt.savefig(nombre_archivo, bbox_inches='tight', dpi=300)
-    print(f"✅ Gráfico guardado: {nombre_archivo}")
-    
-    # Cierra el gráfico para que Python pueda hacer el siguiente sin trabarse
-    plt.close()
+def _slugify(text: str) -> str:
+	clean = "".join(ch.lower() if ch.isalnum() else "_" for ch in text)
+	while "__" in clean:
+		clean = clean.replace("__", "_")
+	return clean.strip("_") or "grafico"
+
+
+def display_plot(fig: go.Figure, section: str = "general", label: str = "grafico") -> None:
+	section_name = section if section in PLOT_COUNTERS else "general"
+	PLOT_COUNTERS[section_name] += 1
+	order_index = PLOT_COUNTERS[section_name]
+	safe_label = _slugify(label)
+	nombre_archivo = (
+		f"grafico_{section_name}_{order_index:02d}_{safe_label}_{int(time.time() * 1000)}.html"
+	)
+	output_path = BASE_DIR / nombre_archivo
+
+	# Guarda HTML interactivo para ser consumido por la API.
+	fig.write_html(str(output_path), include_plotlyjs="cdn", full_html=True)
+	print(f"Grafico interactivo guardado: {nombre_archivo}")
 
 def univariate_report(df: pd.DataFrame) -> None:
 	print("=" * 80)
@@ -71,28 +88,32 @@ def univariate_report(df: pd.DataFrame) -> None:
 	print("3) Visualizaciones univariadas")
 	print("=" * 80)
 
-	fig, axes = plt.subplots(1, len(binary_cols), figsize=(15, 4))
-	for i, col in enumerate(binary_cols):
-		sns.countplot(data=df, x=col, hue=col, ax=axes[i], palette="Set2", legend=False)
-		axes[i].set_title(f"Distribucion de {col}")
-		axes[i].set_xlabel(col)
-		axes[i].set_ylabel("Frecuencia")
-	plt.tight_layout()
-	display_plot()
+	fig_binary = make_subplots(rows=1, cols=len(binary_cols), subplot_titles=[f"Distribucion de {c}" for c in binary_cols])
+	for i, col in enumerate(binary_cols, start=1):
+		counts = df[col].value_counts().sort_index()
+		fig_binary.add_trace(
+			go.Bar(x=counts.index.astype(str), y=counts.values, name=col, showlegend=False),
+			row=1,
+			col=i,
+		)
+		fig_binary.update_xaxes(title_text=col, row=1, col=i)
+		fig_binary.update_yaxes(title_text="Frecuencia", row=1, col=i)
+	fig_binary.update_layout(height=420, width=1300, template="plotly_white", title="Variables binarias")
+	display_plot(fig_binary, section="univariado", label="variables_binarias")
 
 	for col in numeric_cols:
-		fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-		sns.histplot(data=df, x=col, kde=True, ax=ax[0], color="steelblue")
-		ax[0].set_title(f"Histograma de {col}")
-		ax[0].set_xlabel(col)
-		ax[0].set_ylabel("Frecuencia")
-
-		sns.boxplot(data=df, x=col, ax=ax[1], color="lightgreen")
-		ax[1].set_title(f"Boxplot de {col}")
-		ax[1].set_xlabel(col)
-
-		plt.tight_layout()
-		display_plot()
+		fig_num = make_subplots(
+			rows=1,
+			cols=2,
+			subplot_titles=[f"Histograma de {col}", f"Boxplot de {col}"],
+		)
+		fig_num.add_trace(go.Histogram(x=df[col], name=f"Hist {col}", marker_color="#4c78a8"), row=1, col=1)
+		fig_num.add_trace(go.Box(x=df[col], name=f"Box {col}", marker_color="#72b7b2"), row=1, col=2)
+		fig_num.update_xaxes(title_text=col, row=1, col=1)
+		fig_num.update_yaxes(title_text="Frecuencia", row=1, col=1)
+		fig_num.update_xaxes(title_text=col, row=1, col=2)
+		fig_num.update_layout(height=420, width=1100, template="plotly_white")
+		display_plot(fig_num, section="univariado", label=f"{col}_hist_box")
 
 	churn_rate = df[target_col].mean() * 100
 	print("\n" + "=" * 80)
@@ -210,39 +231,75 @@ def bivariate_report(df: pd.DataFrame) -> None:
 	print("=" * 80)
 
 	for col in numeric_cols:
-		fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+		fig_bi_num = make_subplots(
+			rows=1,
+			cols=2,
+			subplot_titles=[f"{col} vs Churn (Boxplot)", f"{col} vs Churn (Distribucion)"],
+		)
 
-		sns.boxplot(data=df, x=target_col, y=col, hue=target_col, palette="Set2", legend=False, ax=ax[0])
-		ax[0].set_title(f"{col} vs Churn (Boxplot)")
-		ax[0].set_xlabel("Churn")
-		ax[0].set_ylabel(col)
+		for churn_value, color in [(0, "#4c78a8"), (1, "#f58518")]:
+			mask = df[target_col] == churn_value
+			fig_bi_num.add_trace(
+				go.Box(
+					y=df.loc[mask, col],
+					name=f"Churn={churn_value}",
+					marker_color=color,
+					boxmean=True,
+				),
+				row=1,
+				col=1,
+			)
+			fig_bi_num.add_trace(
+				go.Histogram(
+					x=df.loc[mask, col],
+					name=f"Churn={churn_value}",
+					opacity=0.55,
+					marker_color=color,
+					histnorm="probability density",
+				),
+				row=1,
+				col=2,
+			)
 
-		sns.kdeplot(data=df, x=col, hue=target_col, fill=True, common_norm=False, alpha=0.35, ax=ax[1])
-		ax[1].set_title(f"{col} vs Churn (Distribucion)")
-		ax[1].set_xlabel(col)
-		ax[1].set_ylabel("Densidad")
-
-		plt.tight_layout()
-		display_plot()
+		fig_bi_num.update_xaxes(title_text="Churn", row=1, col=1)
+		fig_bi_num.update_yaxes(title_text=col, row=1, col=1)
+		fig_bi_num.update_xaxes(title_text=col, row=1, col=2)
+		fig_bi_num.update_yaxes(title_text="Densidad", row=1, col=2)
+		fig_bi_num.update_layout(
+			template="plotly_white",
+			height=420,
+			width=1200,
+			barmode="overlay",
+			legend_title_text="Grupo",
+		)
+		display_plot(fig_bi_num, section="bivariado", label=f"{col}_vs_churn")
 
 	for col in binary_predictors:
 		plot_df = df.groupby(col, as_index=False)[target_col].mean()
 		plot_df[target_col] = plot_df[target_col] * 100
 
-		plt.figure(figsize=(6, 4))
-		sns.barplot(data=plot_df, x=col, y=target_col, hue=col, palette="Set3", legend=False)
-		plt.title(f"Tasa de Churn (%) por {col}")
-		plt.xlabel(col)
-		plt.ylabel("Churn (%)")
-		plt.tight_layout()
-		display_plot()
+		fig_cat = px.bar(
+			plot_df,
+			x=col,
+			y=target_col,
+			color=col,
+			title=f"Tasa de Churn (%) por {col}",
+			labels={target_col: "Churn (%)"},
+		)
+		fig_cat.update_layout(template="plotly_white", showlegend=False, height=420, width=700)
+		display_plot(fig_cat, section="bivariado", label=f"tasa_churn_por_{col}")
 
 	corr_df = df[numeric_cols + [target_col]].corr()
-	plt.figure(figsize=(10, 7))
-	sns.heatmap(corr_df, annot=True, cmap="RdYlBu_r", fmt=".2f", square=True)
-	plt.title("Matriz de correlacion (incluye Churn)")
-	plt.tight_layout()
-	display_plot()
+	fig_corr = px.imshow(
+		corr_df,
+		text_auto=".2f",
+		color_continuous_scale="RdBu_r",
+		zmin=-1,
+		zmax=1,
+		title="Matriz de correlacion (incluye Churn)",
+	)
+	fig_corr.update_layout(template="plotly_white", height=700, width=900)
+	display_plot(fig_corr, section="bivariado", label="matriz_correlacion")
 
 	print("\n" + "=" * 80)
 	print("4) Hallazgos rapidos")
@@ -334,20 +391,16 @@ def train_and_evaluate_models(df: pd.DataFrame) -> None:
 		print("Matriz de confusion:")
 		print(cm)
 
-		plt.figure(figsize=(6, 5))
-		sns.heatmap(
+		fig_cm = px.imshow(
 			cm,
-			annot=True,
-			fmt="d",
-			cmap="Blues",
-			xticklabels=["Pred: No Churn", "Pred: Churn"],
-			yticklabels=["Real: No Churn", "Real: Churn"],
+			text_auto=True,
+			color_continuous_scale="Blues",
+			title=f"Matriz de Confusion - {model_name}",
+			x=["Pred: No Churn", "Pred: Churn"],
+			y=["Real: No Churn", "Real: Churn"],
 		)
-		plt.title(f"Matriz de Confusion - {model_name}")
-		plt.ylabel("Valor real")
-		plt.xlabel("Prediccion")
-		plt.tight_layout()
-		display_plot()
+		fig_cm.update_layout(template="plotly_white", height=500, width=700)
+		display_plot(fig_cm, section="modelado", label=f"confusion_{model_name}")
 
 	results_df = pd.DataFrame(results).sort_values("f1", ascending=False)
 	print("\n" + "=" * 80)

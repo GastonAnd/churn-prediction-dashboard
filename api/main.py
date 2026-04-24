@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from typing import Literal
 
 import pandas as pd
@@ -94,6 +95,22 @@ if not DATA_PATH.exists():
 _df = pd.read_csv(DATA_PATH)
 logistic_model, tree_model, full_X, full_y = build_models(_df)
 
+SECTION_ORDER = {
+    "univariado": 0,
+    "bivariado": 1,
+    "modelado": 2,
+    "general": 3,
+}
+
+
+def _chart_metadata(file_path: Path) -> tuple[str, int]:
+    match = re.match(r"^grafico_(univariado|bivariado|modelado|general)_(\d+)_", file_path.name)
+    if match:
+        section = match.group(1)
+        index = int(match.group(2))
+        return section, index
+    return "general", 10_000
+
 
 @app.get("/health")
 def health() -> dict:
@@ -102,10 +119,25 @@ def health() -> dict:
 
 @app.get("/eda-images")
 def eda_images() -> dict:
-    files = sorted(BASE_DIR.glob("grafico_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    html_files = sorted(BASE_DIR.glob("grafico_*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    png_files = sorted(BASE_DIR.glob("grafico_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = html_files if html_files else png_files
+
+    categorized_files = [f for f in files if _chart_metadata(f)[0] != "general"]
+    if categorized_files:
+        files = categorized_files
+
+    files = sorted(files, key=lambda f: (SECTION_ORDER.get(_chart_metadata(f)[0], 99), _chart_metadata(f)[1]))
+    grouped: dict[str, list[str]] = {"univariado": [], "bivariado": [], "modelado": [], "general": []}
+    for file_path in files:
+        section, _ = _chart_metadata(file_path)
+        grouped.setdefault(section, []).append(f"/charts/{file_path.name}")
+
+    grouped = {key: value for key, value in grouped.items() if value}
     return {
         "count": len(files),
         "images": [f"/charts/{f.name}" for f in files],
+        "charts_by_section": grouped,
     }
 
 

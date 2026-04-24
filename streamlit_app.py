@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 
 def configure_page() -> None:
@@ -70,13 +72,6 @@ def fetch_predictions_dataframe(api_base_url: str, model_name: str, limit: int) 
     return pd.DataFrame(payload.get("rows", []))
 
 
-@st.cache_data(ttl=60)
-def fetch_eda_images(api_base_url: str) -> list[str]:
-    payload = call_api_json(f"{api_base_url}/eda-images")
-    base = api_base_url.rstrip("/")
-    return [f"{base}{path}" for path in payload.get("images", [])]
-
-
 def render_header() -> None:
     st.markdown(
         """
@@ -103,20 +98,52 @@ def render_sidebar() -> tuple[str, str, str]:
     return selected_tab, api_url.rstrip("/"), eda_model
 
 
-def render_eda(df: pd.DataFrame, image_urls: list[str], eda_model: str) -> None:
-    st.subheader("Analisis Exploratorio (EDA)")
-    st.write("Analisis basado en datos reales servidos por la API.")
+def render_univariate_section(df: pd.DataFrame) -> None:
+    st.markdown("### Univariado")
 
-    if df.empty:
-        st.warning("La API no devolvio filas para el analisis EDA.")
-        return
+    binary_cols = ["Churn", "ContractRenewal", "DataPlan"]
+    fig_binary = make_subplots(
+        rows=1,
+        cols=len(binary_cols),
+        subplot_titles=[f"Distribucion de {c}" for c in binary_cols],
+    )
+    for i, col in enumerate(binary_cols, start=1):
+        counts = df[col].value_counts().sort_index()
+        fig_binary.add_trace(
+            go.Bar(x=counts.index.astype(str), y=counts.values, showlegend=False),
+            row=1,
+            col=i,
+        )
+        fig_binary.update_xaxes(title_text=col, row=1, col=i)
+        fig_binary.update_yaxes(title_text="Frecuencia", row=1, col=i)
+    fig_binary.update_layout(template="plotly_white", height=420)
+    st.plotly_chart(fig_binary, use_container_width=True)
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Clientes", f"{len(df):,}")
-    col2.metric("Tasa de churn", f"{df['Churn'].mean() * 100:.1f}%")
-    col3.metric("Gasto mensual promedio", f"${df['MonthlyCharge'].mean():.2f}")
-    st.caption(f"Modelo seleccionado para obtener datos enriquecidos: {eda_model}")
+    numeric_cols = [
+        "AccountWeeks",
+        "DataUsage",
+        "CustServCalls",
+        "DayMins",
+        "DayCalls",
+        "MonthlyCharge",
+        "OverageFee",
+        "RoamMins",
+    ]
+    with st.expander("Ver distribuciones numericas", expanded=False):
+        for col in numeric_cols:
+            fig_num = make_subplots(
+                rows=1,
+                cols=2,
+                subplot_titles=[f"Histograma de {col}", f"Boxplot de {col}"],
+            )
+            fig_num.add_trace(go.Histogram(x=df[col], marker_color="#4c78a8"), row=1, col=1)
+            fig_num.add_trace(go.Box(x=df[col], marker_color="#72b7b2"), row=1, col=2)
+            fig_num.update_layout(template="plotly_white", height=360)
+            st.plotly_chart(fig_num, use_container_width=True)
 
+
+def render_bivariate_section(df: pd.DataFrame) -> None:
+    st.markdown("### Bivariado")
     churn_labels = df["Churn"].map({0: "No", 1: "Si"})
 
     fig_churn = px.histogram(
@@ -155,12 +182,80 @@ def render_eda(df: pd.DataFrame, image_urls: list[str], eda_model: str) -> None:
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
 
-    st.markdown("### Graficas EDA generadas por backend")
-    if image_urls:
-        for image_url in image_urls[:8]:
-            st.image(image_url, use_container_width=True)
-    else:
-        st.info("No se encontraron imagenes EDA en la API.")
+    corr_cols = [
+        "AccountWeeks",
+        "DataUsage",
+        "CustServCalls",
+        "DayMins",
+        "DayCalls",
+        "MonthlyCharge",
+        "OverageFee",
+        "RoamMins",
+        "Churn",
+    ]
+    fig_corr = px.imshow(
+        df[corr_cols].corr(),
+        text_auto=".2f",
+        color_continuous_scale="RdBu_r",
+        zmin=-1,
+        zmax=1,
+        title="Matriz de correlacion (incluye Churn)",
+    )
+    fig_corr.update_layout(template="plotly_white", height=700)
+    st.plotly_chart(fig_corr, use_container_width=True)
+
+
+def render_model_section(df: pd.DataFrame, eda_model: str) -> None:
+    if "predicted_churn" not in df.columns:
+        return
+
+    st.markdown("### Modelado")
+    st.caption(f"Metricas del modelo usado para esta vista: {eda_model}")
+
+    cm_df = pd.crosstab(df["Churn"], df["predicted_churn"]).reindex(index=[0, 1], columns=[0, 1], fill_value=0)
+    tn, fp, fn, tp = cm_df.loc[0, 0], cm_df.loc[0, 1], cm_df.loc[1, 0], cm_df.loc[1, 1]
+
+    total = tn + fp + fn + tp
+    accuracy = (tn + tp) / total if total else 0.0
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) else 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Accuracy", f"{accuracy:.4f}")
+    m2.metric("Precision", f"{precision:.4f}")
+    m3.metric("Recall", f"{recall:.4f}")
+    m4.metric("F1", f"{f1:.4f}")
+
+    fig_cm = px.imshow(
+        cm_df.values,
+        text_auto=True,
+        color_continuous_scale="Blues",
+        title="Matriz de Confusion",
+        x=["Pred: No Churn", "Pred: Churn"],
+        y=["Real: No Churn", "Real: Churn"],
+    )
+    fig_cm.update_layout(template="plotly_white", height=500)
+    st.plotly_chart(fig_cm, use_container_width=True)
+
+
+def render_eda(df: pd.DataFrame, eda_model: str) -> None:
+    st.subheader("Analisis Exploratorio (EDA)")
+    st.write("Analisis basado en datos reales servidos por la API.")
+
+    if df.empty:
+        st.warning("La API no devolvio filas para el analisis EDA.")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Clientes", f"{len(df):,}")
+    col2.metric("Tasa de churn", f"{df['Churn'].mean() * 100:.1f}%")
+    col3.metric("Gasto mensual promedio", f"${df['MonthlyCharge'].mean():.2f}")
+    st.caption(f"Modelo seleccionado para obtener datos enriquecidos: {eda_model}")
+
+    render_univariate_section(df)
+    render_bivariate_section(df)
+    render_model_section(df, eda_model)
 
     st.dataframe(df.head(20), use_container_width=True)
 
@@ -253,8 +348,7 @@ def main() -> None:
 
     if selected_tab == "Analisis Exploratorio (EDA)":
         df = fetch_predictions_dataframe(api_base_url, model_name=eda_model, limit=3333)
-        image_urls = fetch_eda_images(api_base_url)
-        render_eda(df, image_urls, eda_model)
+        render_eda(df, eda_model)
     else:
         render_predictive_simulator(api_base_url)
 
