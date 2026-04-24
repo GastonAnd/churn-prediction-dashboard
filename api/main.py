@@ -79,7 +79,7 @@ app = FastAPI(title="Churn Prediction API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://127.0.0.1:8501",
+        "https://churn-prediction-dashboard-3yla.onrender.com",
         "http://localhost:8501",
     ],
     allow_credentials=True,
